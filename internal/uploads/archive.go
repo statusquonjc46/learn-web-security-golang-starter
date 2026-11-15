@@ -68,6 +68,20 @@ func ExtractTaxDocumentArchive(encryptionKeyring Keyring, contents []byte, extra
 	plannedEntries := make([]plannedArchiveEntry, 0, len(archiveReader.File))
 	for _, entry := range archiveReader.File {
 		entryDestination := filepath.Join(importDirectory, entry.Name)
+
+		if filepath.IsAbs(entry.Name) {
+			return ExtractedTaxDocumentArchive{}, &ArchiveImportError{Message: "Path is absolute.", StatusCode: 400}
+		}
+		if strings.Contains(entryDestination, "\\") {
+			return ExtractedTaxDocumentArchive{}, &ArchiveImportError{Message: "Invalid character in path.", StatusCode: 400}
+		}
+		if !isInsideDirectory(importDirectory, entryDestination) {
+			return ExtractedTaxDocumentArchive{}, &ArchiveImportError{Message: "Bad extraction path.", StatusCode: 400}
+		}
+		if entry.Mode()&os.ModeSymlink != 0 {
+			return ExtractedTaxDocumentArchive{}, &ArchiveImportError{Message: "File path contains symlink", StatusCode: 400}
+		}
+
 		if isIgnoredArchiveEntry(entry.Name) {
 			continue
 		}
@@ -91,6 +105,7 @@ func ExtractTaxDocumentArchive(encryptionKeyring Keyring, contents []byte, extra
 		if encrypted {
 			storagePath += ".enc"
 		}
+
 		plannedEntries = append(plannedEntries, plannedArchiveEntry{
 			destination: storagePath, contents: storedContents, encrypted: encrypted,
 			document: ExtractedTaxDocument{OriginalName: entry.Name, StoragePath: storagePath, ContentType: contentType},
@@ -186,4 +201,15 @@ func discardArchiveAfterWriteFailure(archive ExtractedTaxDocumentArchive, err er
 		return ExtractedTaxDocumentArchive{}, errors.Join(err, discardErr)
 	}
 	return ExtractedTaxDocumentArchive{}, err
+}
+
+func isInsideDirectory(dir, candidatePath string) bool {
+	relativePath, err := filepath.Rel(dir, candidatePath)
+	if err != nil ||
+		relativePath == "." ||
+		relativePath == ".." ||
+		strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
 }
