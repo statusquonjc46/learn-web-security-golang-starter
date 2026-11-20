@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -34,6 +35,55 @@ func applyNoSniff(next http.Handler) http.Handler {
 		responseWriter.Header().Set("X-Content-Type-Options", "nosniff")
 		next.ServeHTTP(responseWriter, request)
 	})
+}
+
+func csrfBlock(origin string, tmpRenderer *templates.Renderer) middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
+			reject := func() {
+				if err := httpx.RespondWithErrorPage(responseWriter, tmpRenderer, http.StatusForbidden, "Forbidden", "Forbidden"); err != nil {
+					http.Error(responseWriter, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			}
+			if request.Method != "POST" {
+				next.ServeHTTP(responseWriter, request)
+				return
+			}
+
+			originClient := request.Header.Get("Origin")
+			var source string
+
+			if originClient == "" {
+				refFull := request.Header.Get("Referer")
+				ref, err := url.Parse(refFull)
+				if err != nil {
+					reject()
+					return
+				}
+				if ref.Scheme == "" || ref.Host == "" {
+					reject()
+					return
+				}
+				source = ref.Scheme + "://" + ref.Host
+
+				if origin != source {
+					reject()
+					return
+				}
+
+				next.ServeHTTP(responseWriter, request)
+				return
+			}
+			source = originClient
+
+			if origin != source {
+				reject()
+				return
+			}
+
+			next.ServeHTTP(responseWriter, request)
+		})
+	}
 }
 
 func permissiveCORS(next http.Handler) http.Handler {
